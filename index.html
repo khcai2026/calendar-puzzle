@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
-<title>月曆拼圖：日期挑戰檢查版</title>
+<title>月曆拼圖：老師預放四塊QR版</title>
 <style>
   :root{
     --cell: 54px;
@@ -128,12 +128,51 @@
   .piece.selected .block{
     box-shadow:inset 0 0 0 3px rgba(255,255,255,.55);
   }
+  .piece.locked{cursor:not-allowed;filter:drop-shadow(0 3px 3px rgba(0,0,0,.18)) opacity(.88);}
+  .piece.locked .block{box-shadow:inset 0 0 0 4px rgba(0,0,0,.20);}
   .block{
     position:absolute;
     width:var(--cell);
     height:var(--cell);
     border:1.7px solid #111;
     pointer-events:auto;
+  }
+
+  
+  #qrPanel{
+    position:fixed;
+    right:18px;
+    top:88px;
+    width:310px;
+    background:white;
+    border:1px solid #ddd;
+    border-radius:18px;
+    box-shadow:0 10px 28px rgba(0,0,0,.22);
+    padding:14px;
+    z-index:99;
+    display:none;
+  }
+  #qrPanel h3{margin:0 0 8px 0;font-size:18px}
+  #qrPanel img{width:260px;height:260px;display:block;margin:8px auto;border:1px solid #eee}
+  #studentLink{
+    width:100%;
+    min-height:62px;
+    border:1px solid #ddd;
+    border-radius:10px;
+    padding:8px;
+    font-size:12px;
+    resize:none;
+  }
+  #closeQR{float:right}
+  body.student #teacherMode,
+  body.student #lockSelected,
+  body.student #saveSetup,
+  body.student #makeQR{
+    display:none;
+  }
+  body.student h1::after{
+    content:"｜學生挑戰";
+    color:#136b22;
   }
 
   @media(max-width:900px){
@@ -146,7 +185,7 @@
 </head>
 <body>
 <header>
-  <h1>「拼」然心動｜月曆拼圖日期挑戰版</h1>
+  <h1>「拼」然心動｜老師預放四塊QR挑戰版</h1>
   <div class="tools">
     <label>月份
       <select id="monthSelect"></select>
@@ -155,6 +194,10 @@
       <select id="daySelect"></select>
     </label>
     <button id="check">檢查是否正確</button>
+    <button id="teacherMode">老師預放四塊：關</button>
+    <button id="lockSelected">鎖定/解鎖選取拼塊</button>
+    <button id="saveSetup">複製目前關卡指令</button>
+    <button id="makeQR">產生學生QR Code</button>
     <select id="snapMode">
       <option value="on">吸附格線：開</option>
       <option value="off">吸附格線：關</option>
@@ -179,6 +222,15 @@
   </section>
 </div>
 
+<div id="qrPanel">
+  <button id="closeQR">關閉</button>
+  <h3>學生挑戰 QR Code</h3>
+  <p style="font-size:14px;line-height:1.5;margin:6px 0;">學生掃描後，會看到老師預放並鎖定的拼塊，接著完成剩下拼圖。</p>
+  <img id="qrImg" alt="學生挑戰 QR Code">
+  <textarea id="studentLink" readonly></textarea>
+  <button id="copyStudentLink" style="width:100%;margin-top:8px;">複製學生挑戰連結</button>
+</div>
+
 <script>
 const CELL = 54;
 const workspace = document.getElementById("workspace");
@@ -190,6 +242,7 @@ const daySelect = document.getElementById("daySelect");
 
 let selected = null;
 let zTop = 100;
+let scaffoldMode = false;
 const cellMap = new Map();
 
 const boardCells = [
@@ -281,7 +334,8 @@ function renderPiece(el){
 function makePiece(p, i){
   const el=document.createElement("div");
   el.className="piece";
-  el._piece={...p, base:p.cells, rot:0, flipX:false};
+  el.dataset.index = i;
+  el._piece={...p, base:p.cells, rot:0, flipX:false, locked:false};
   el.style.left=(585 + (i%2)*245)+"px";
   el.style.top=(60 + Math.floor(i/2)*122)+"px";
   el.style.zIndex=++zTop;
@@ -298,6 +352,12 @@ function enableDrag(el){
   let startX,startY,origX,origY,dragging=false;
   el.addEventListener("pointerdown", e=>{
     setSelected(el);
+    if(el._piece.locked){
+      msg.textContent = "這片是老師預放並鎖定的拼塊，請移動其他未鎖定拼塊。";
+      msg.style.background = "#f4eadf";
+      msg.style.color = "#704111";
+      return;
+    }
     el.setPointerCapture(e.pointerId);
     dragging=true;
     startX=e.clientX; startY=e.clientY;
@@ -335,13 +395,13 @@ function snapToGrid(el){
   }
 }
 function rotateSelected(deg){
-  if(!selected) return;
+  if(!selected || selected._piece.locked) return;
   selected._piece.rot = (selected._piece.rot + deg + 360) % 360;
   renderPiece(selected);
   if(snapMode.value==="on") snapToGrid(selected);
 }
 function flipSelected(){
-  if(!selected) return;
+  if(!selected || selected._piece.locked) return;
   selected._piece.flipX = !selected._piece.flipX;
   renderPiece(selected);
   if(snapMode.value==="on") snapToGrid(selected);
@@ -411,6 +471,273 @@ function checkAnswer(){
     msg.style.color = "#9a1f12";
   }
 }
+
+
+function allOrientations(base, color, index){
+  const seen = new Set();
+  const outs = [];
+  for(const flipX of [false, true]){
+    for(const rot of [0,90,180,270]){
+      let cells = base.map(([x,y])=>[flipX ? -x : x, y]);
+      const turns = rot / 90;
+      for(let i=0;i<turns;i++) cells = cells.map(([x,y])=>[y, -x]);
+      const b = bounds(cells);
+      cells = cells.map(([x,y])=>[x-b.minX,y-b.minY]).sort((a,b)=>a[1]-b[1] || a[0]-b[0]);
+      const key = JSON.stringify(cells);
+      if(!seen.has(key)){
+        seen.add(key);
+        outs.push({index, color, cells, rot, flipX});
+      }
+    }
+  }
+  return outs;
+}
+function solveCurrentDate(){
+  const blocked = new Set();
+  const m = cellMap.get(monthSelect.value);
+  const d = cellMap.get(daySelect.value);
+  blocked.add(`${m.r},${m.c}`);
+  blocked.add(`${d.r},${d.c}`);
+
+  const valid = [];
+  boardCells.forEach((row,r)=>row.forEach((txt,c)=>{
+    if(!blocked.has(`${r},${c}`)) valid.push(`${r},${c}`);
+  }));
+
+  const placementsByPiece = pieces.map((p,idx)=>{
+    const list = [];
+    for(const o of allOrientations(p.cells, p.color, idx)){
+      const b = bounds(o.cells);
+      for(let r=0;r<=6-b.maxY;r++){
+        for(let c=0;c<=6-b.maxX;c++){
+          const cells = o.cells.map(([x,y])=>[r+y,c+x]);
+          if(cells.every(([rr,cc])=>boardCells[rr] && boardCells[rr][cc] !== undefined && !blocked.has(`${rr},${cc}`))){
+            list.push({...o, r, c, keys: cells.map(([rr,cc])=>`${rr},${cc}`)});
+          }
+        }
+      }
+    }
+    return list;
+  });
+
+  function backtrack(i, used, chosen){
+    if(i === pieces.length) return chosen;
+    let bestPiece = -1, bestOptions = null;
+    for(let p=0;p<pieces.length;p++){
+      if(chosen.some(x=>x.index===p)) continue;
+      const options = placementsByPiece[p].filter(pl=>pl.keys.every(k=>!used.has(k)));
+      if(bestOptions === null || options.length < bestOptions.length){
+        bestOptions = options;
+        bestPiece = p;
+      }
+    }
+    if(!bestOptions || bestOptions.length === 0) return null;
+    // 為了每次日期有穩定但不呆板的預放，稍微優先選靠左上的答案
+    bestOptions.sort((a,b)=>(a.r+a.c)-(b.r+b.c));
+    for(const pl of bestOptions){
+      pl.keys.forEach(k=>used.add(k));
+      const ans = backtrack(i+1, used, chosen.concat(pl));
+      if(ans) return ans;
+      pl.keys.forEach(k=>used.delete(k));
+    }
+    return null;
+  }
+  return backtrack(0, new Set(), []);
+}
+function placeSolutionScaffold(){
+  resetPieces();
+  const solution = solveCurrentDate();
+  if(!solution){
+    msg.textContent = "這個日期暫時找不到預放解，請換一個日期試試。";
+    msg.style.background = "#ffe4e1";
+    msg.style.color = "#9a1f12";
+    return;
+  }
+  const boardRect = board.getBoundingClientRect();
+  const wsRect = workspace.getBoundingClientRect();
+
+  // 先放四片並鎖定：選擇答案中靠左上的四片，形成清楚鷹架
+  const scaffold = [...solution].sort((a,b)=>(a.r+a.c)-(b.r+b.c)).slice(0,4);
+  scaffold.forEach(pl=>{
+    const el = document.querySelector(`.piece[data-index="${pl.index}"]`);
+    if(!el) return;
+    el._piece.rot = pl.rot;
+    el._piece.flipX = pl.flipX;
+    el._piece.locked = true;
+    renderPiece(el);
+    el.classList.add("locked");
+    el.style.left = (pl.c * CELL + boardRect.left - wsRect.left) + "px";
+    el.style.top = (pl.r * CELL + boardRect.top - wsRect.top) + "px";
+    el.style.zIndex = ++zTop;
+  });
+
+  // 剩下四片放回右側，讓學生操作
+  let freeSlot = 0;
+  solution.filter(pl=>!scaffold.some(s=>s.index===pl.index)).forEach(pl=>{
+    const el = document.querySelector(`.piece[data-index="${pl.index}"]`);
+    if(!el) return;
+    el._piece.rot = 0;
+    el._piece.flipX = false;
+    el._piece.locked = false;
+    renderPiece(el);
+    el.classList.remove("locked");
+    el.style.left = (585 + (freeSlot%2)*245) + "px";
+    el.style.top = (60 + Math.floor(freeSlot/2)*122) + "px";
+    freeSlot++;
+  });
+
+  msg.textContent = `已為 ${monthSelect.value} ${daySelect.value}日 預放並鎖定四片；鎖定拼塊不能移動，學生可拖曳剩下四片完成。`;
+  msg.style.background = "#dff5df";
+  msg.style.color = "#136b22";
+}
+function toggleTeacherMode(){
+  scaffoldMode = !scaffoldMode;
+  document.getElementById("teacherMode").textContent = "老師預放四塊：" + (scaffoldMode ? "開" : "關");
+  if(scaffoldMode){
+    placeSolutionScaffold();
+    setSelected(null);
+  }else{
+    document.querySelectorAll(".piece").forEach(el=>{
+      el._piece.locked = false;
+      el.classList.remove("locked");
+    });
+    msg.textContent = "已關閉老師預放四塊，所有拼塊都可自由移動。";
+    msg.style.background = "#f4eadf";
+    msg.style.color = "#704111";
+  }
+}
+function toggleLockSelected(){
+  if(!scaffoldMode){ msg.textContent="請先開啟老師預放四塊。"; return; }
+  if(!selected){
+    msg.textContent = "請先點選一片拼塊。";
+    return;
+  }
+  selected._piece.locked = !selected._piece.locked;
+  selected.classList.toggle("locked", selected._piece.locked);
+  msg.textContent = selected._piece.locked ? "已鎖定這片拼塊，學生不能移動它。" : "已解鎖這片拼塊。";
+  msg.style.background = "#f4eadf";
+  msg.style.color = "#704111";
+}
+function saveSetup(){
+  const boardRect = board.getBoundingClientRect();
+  const setup = {
+    month: monthSelect.value,
+    day: daySelect.value,
+    pieces: [...document.querySelectorAll(".piece")].map(el=>{
+      const rect = el.getBoundingClientRect();
+      return {
+        index: Number(el.dataset.index),
+        x: Math.round((rect.left - boardRect.left) / CELL),
+        y: Math.round((rect.top - boardRect.top) / CELL),
+        rot: el._piece.rot,
+        flipX: el._piece.flipX,
+        locked: el._piece.locked
+      };
+    })
+  };
+  const code = btoa(unescape(encodeURIComponent(JSON.stringify(setup))));
+  const full = "關卡指令：" + code;
+  if(navigator.clipboard){
+    navigator.clipboard.writeText(full);
+  }
+  msg.textContent = "已複製關卡指令。也可以把這串貼給我，我幫您做成學生專用固定版。";
+  msg.style.background = "#dff5df";
+  msg.style.color = "#136b22";
+}
+
+
+function currentSetupForStudent(){
+  const boardRect = board.getBoundingClientRect();
+  return {
+    mode: "student",
+    month: monthSelect.value,
+    day: daySelect.value,
+    pieces: [...document.querySelectorAll(".piece")].map(el=>{
+      const rect = el.getBoundingClientRect();
+      return {
+        index: Number(el.dataset.index),
+        x: Math.round((rect.left - boardRect.left) / CELL),
+        y: Math.round((rect.top - boardRect.top) / CELL),
+        rot: el._piece.rot,
+        flipX: el._piece.flipX,
+        locked: el._piece.locked
+      };
+    })
+  };
+}
+function encodeSetup(setup){
+  return btoa(unescape(encodeURIComponent(JSON.stringify(setup))));
+}
+function decodeSetup(code){
+  return JSON.parse(decodeURIComponent(escape(atob(code))));
+}
+function applySetup(setup){
+  monthSelect.value = setup.month || "1月";
+  daySelect.value = setup.day || "1";
+  highlightTarget();
+
+  const boardRect = board.getBoundingClientRect();
+  const wsRect = workspace.getBoundingClientRect();
+
+  if(setup.pieces){
+    setup.pieces.forEach(s=>{
+      const el = document.querySelector(`.piece[data-index="${s.index}"]`);
+      if(!el) return;
+      el._piece.rot = s.rot || 0;
+      el._piece.flipX = !!s.flipX;
+      el._piece.locked = !!s.locked;
+      renderPiece(el);
+      el.classList.toggle("locked", el._piece.locked);
+      el.style.left = (s.x * CELL + boardRect.left - wsRect.left) + "px";
+      el.style.top = (s.y * CELL + boardRect.top - wsRect.top) + "px";
+      el.style.zIndex = ++zTop;
+    });
+  }
+}
+function makeStudentURL(){
+  // 若老師還沒預放，先自動產生一題
+  if(!scaffoldMode){
+    scaffoldMode = true;
+    document.getElementById("teacherMode").textContent = "老師預放四塊：開";
+    placeSolutionScaffold();
+  }
+  const setup = currentSetupForStudent();
+  const code = encodeSetup(setup);
+  return location.origin + location.pathname + "#challenge=" + code;
+}
+function showStudentQR(){
+  const url = makeStudentURL();
+  document.getElementById("studentLink").value = url;
+  document.getElementById("qrImg").src = "https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=" + encodeURIComponent(url);
+  document.getElementById("qrPanel").style.display = "block";
+  msg.textContent = "已產生學生挑戰 QR Code。學生掃描後會進入同一題繼續挑戰。";
+  msg.style.background = "#dff5df";
+  msg.style.color = "#136b22";
+}
+function loadChallengeFromURL(){
+  if(!location.hash.startsWith("#challenge=")) return;
+  try{
+    const code = location.hash.replace("#challenge=","");
+    const setup = decodeSetup(code);
+    applySetup(setup);
+    document.body.classList.add("student");
+    scaffoldMode = true;
+    msg.textContent = `學生挑戰：請完成 ${monthSelect.value} ${daySelect.value}日，鎖定拼塊不能移動。`;
+    msg.style.background = "#dff5df";
+    msg.style.color = "#136b22";
+  }catch(e){
+    msg.textContent = "挑戰連結讀取失敗，請老師重新產生 QR Code。";
+    msg.style.background = "#ffe4e1";
+    msg.style.color = "#9a1f12";
+  }
+}
+
+document.getElementById("teacherMode").onclick=toggleTeacherMode;
+document.getElementById("makeQR").onclick=showStudentQR;
+document.getElementById("closeQR").onclick=()=>document.getElementById("qrPanel").style.display="none";
+document.getElementById("copyStudentLink").onclick=()=>{navigator.clipboard?.writeText(document.getElementById("studentLink").value); msg.textContent="已複製學生挑戰連結。";};
+document.getElementById("lockSelected").onclick=toggleLockSelected;
+document.getElementById("saveSetup").onclick=saveSetup;
 document.getElementById("rotL").onclick=()=>rotateSelected(-90);
 document.getElementById("rotR").onclick=()=>rotateSelected(90);
 document.getElementById("flip").onclick=flipSelected;
@@ -421,7 +748,7 @@ window.addEventListener("keydown", e=>{
   if(e.key.toLowerCase()==="l") rotateSelected(-90);
   if(e.key.toLowerCase()==="f") flipSelected();
 });
-resetPieces();
+resetPieces();setTimeout(loadChallengeFromURL,150);
 </script>
 </body>
 </html>
